@@ -87,13 +87,17 @@ def test_bad_inputs(tmp_path, lru_trace):
         prefixsim.simulate(tmp_path / "missing.lcp.zst", 4, "lru")
 
 
-def test_sweep(tmp_path, gap_trace):
+def test_grid(tmp_path, gap_trace):
     lcp, out = tmp_path / "gap.lcp.zst", tmp_path / "out.csv"
     prefixsim.convert(gap_trace, lcp)
-    results = prefixsim.sweep(lcp, "fifo,lru", [3, 4], jobs=2, csv_path=out)
-    assert [(r["algorithm"], r["cache_size_blocks"]) for r in results] == [("fifo", 3), ("fifo", 4), ("lru", 3), ("lru", 4)]
-    assert results[0]["engine_hit_ratio"] == 1 / 8
+    expected = [("fifo", 3), ("fifo", 4), ("lru", 3), ("lru", 4)]
+    parallel = prefixsim.simulate(lcp, [3, 4], "fifo,lru", jobs=2, csv_path=out)
+    assert [(r["algorithm"], r["cache_size_blocks"]) for r in parallel] == expected
+    assert parallel[0]["engine_hit_ratio"] == 1 / 8
     assert len(out.read_text().splitlines()) == 5
-    # libCacheSim aborts on an S3-FIFO below 10 blocks: only the worker dies
+    in_process = prefixsim.simulate(lcp, [3, 4], "fifo,lru", jobs=1)
+    drop = lambda r: {k: v for k, v in r.items() if k != "elapsed_s"}
+    assert [drop(r) for r in in_process] == [drop(r) for r in parallel]
+    # libCacheSim aborts on an S3-FIFO below 10 blocks: only its worker dies
     with pytest.raises(RuntimeError, match="worker process died.*s3fifo@3"):
-        prefixsim.sweep(lcp, "s3fifo", [3], jobs=1)
+        prefixsim.simulate(lcp, [3, 4], "s3fifo", jobs=2)

@@ -18,7 +18,7 @@ from . import _core
 from .model import ModelSpec
 
 __all__ = ["ModelSpec", "convert", "download_trace", "parse_cache_size", "simulate", "supported_algorithms",
-           "sweep", "trace_info"]
+           "trace_info"]
 
 _BLOCKS = {"": 1, "k": 2**10, "m": 2**20}  # as the CLI
 _BYTES = {"b": 1, "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40,
@@ -97,7 +97,7 @@ def parse_cache_size(size: int | str, block_bytes: int | None = None) -> int:
 
 def simulate(
     trace: str | os.PathLike,
-    cache_size: int | str,
+    cache_size: int | str | Sequence[int | str],
     algorithms: str | Sequence[str] = "lru",
     *,
     model: ModelSpec | str | None = None,
@@ -112,15 +112,23 @@ def simulate(
     pin: bool = True,
     engine_metrics: bool = True,
     seed: int | None = None,
+    jobs: int | None = None,
+    csv_path: str | os.PathLike | None = None,
+    progress: bool = True,
 ) -> list[dict]:
-    """Simulate eviction algorithms over a trace, one after another.
+    """Simulate every algorithm at every cache size over a trace.
+
+    One run executes in this process. Several run in parallel, each in its own
+    worker process, so a worker that dies (PrefixSim aborts on some errors, e.g.
+    ``s3fifo`` below 10 blocks) loses only its own run. Workers are spawned: a
+    script that starts several runs needs ``if __name__ == "__main__":``.
 
     Args:
         trace: a trace name, ``"freeinference"`` or ``"chutes"``, downloaded
             with :func:`download_trace`; or a file: lcp (``.lcp``, ``.lcp.zst``;
             streamed) or JSONL (loaded whole; :func:`convert` it first).
-        cache_size: blocks or bytes, as for :func:`parse_cache_size`. Bytes need
-            ``model`` or ``kv_bytes_per_token``.
+        cache_size: one size or a list; blocks or bytes, as for
+            :func:`parse_cache_size`. Bytes need ``model`` or ``kv_bytes_per_token``.
         algorithms: a name, ``"lru,s3fifo"`` or a list; see :func:`supported_algorithms`.
         model: a Hugging Face model id (``"Qwen/Qwen3-Coder-30B-A3B-Instruct"``,
             read with :meth:`ModelSpec.from_hf`; ``HF_TOKEN`` for gated ones) or
@@ -145,16 +153,26 @@ def simulate(
             lookup per such block (about 4% time).
         seed: seed for randomised algorithms. ``None`` starts where a fresh
             ``prefixsim`` process does, so results match the CLI.
+        jobs: worker processes for several runs; default one per run, up to the
+            number of cores. ``1`` runs them one after another in this process.
+        csv_path: append each result to this CSV as it finishes.
+        progress: print a line per finished run to stderr.
 
     Returns:
-        One dict per algorithm: the settings above, PrefixSim's ``block_hit_ratio``
-        and ``compute_saving_ratio`` (every resident block counts, past a miss
-        too), the engine ratios, request and eviction counts, ``elapsed_s``.
+        One dict per run, by algorithm, then cache size: the settings above,
+        PrefixSim's ``block_hit_ratio`` and ``compute_saving_ratio`` (every
+        resident block counts, past a miss too), the engine ratios, request and
+        eviction counts, ``elapsed_s``.
     """
     if replay_order not in ("deepest-first", "prefix-order"):
         raise ValueError("replay_order: deepest-first | prefix-order")
     if model is not None and kv_bytes_per_token is not None:
         raise ValueError("pass model or kv_bytes_per_token, not both")
+    algos = [a.strip().lower() for a in (algorithms.split(",") if isinstance(algorithms, str) else algorithms)]
+    unknown = set(algos) - {a.lower() for a in _core.supported_algorithms()}
+    if unknown:
+        raise ValueError(f"unsupported algorithms {sorted(unknown)}; see supported_algorithms()")
+
     trace, model = _trace(trace), _model(model)
     info = _core.trace_info(trace, trace_format)
     tokens = info["block_size_tokens"] or block_size_tokens
@@ -164,25 +182,48 @@ def simulate(
     if per_token and not tokens:
         raise ValueError("the trace does not record its block size: pass block_size_tokens")
     block_bytes = per_token * tokens if per_token else None
-    blocks = parse_cache_size(cache_size, block_bytes)
+    sizes = [cache_size] if isinstance(cache_size, (int, str)) else list(cache_size)
+    blocks = [parse_cache_size(s, block_bytes) for s in sizes]
     if cost_model is None:
         cost_model = model.cost_model(tokens, info["max_blocks_per_request"] or 16384) if model else "uniform"
-
-    algos = [a.strip().lower() for a in (algorithms.split(",") if isinstance(algorithms, str) else algorithms)]
-    unknown = set(algos) - {a.lower() for a in _core.supported_algorithms()}
-    if unknown:
-        raise ValueError(f"unsupported algorithms {sorted(unknown)}; see supported_algorithms()")
-    if info["annotated"] and (info["max_blocks_per_request"] or 0) > blocks:
+    if info["annotated"] and (info["max_blocks_per_request"] or 0) > min(blocks):
         warnings.warn("a request is larger than the cache, so the whole trace is loaded into memory")
 
-    rows = _core.simulate(trace, blocks, algos, cost_model=cost_model, algo_params=algo_params,
-                          trace_format=trace_format, block_id=block_id,
-                          replay_deepest_first=replay_order == "deepest-first", verify=verify, pin=pin,
-                          engine_metrics=engine_metrics, seed=-1 if seed is None else seed)
-    head = dict(trace=trace, cache_size_blocks=blocks, cache_bytes=block_bytes and blocks * block_bytes,
-                block_size_tokens=tokens, cost_model=cost_model, model=model and model.name,
-                algo_params=algo_params, block_id=block_id, replay_order=replay_order, seed=seed)
-    results = [{"algorithm": a, **head, **row} for a, row in zip(algos, rows)]
+    core = dict(cost_model=cost_model, algo_params=algo_params, trace_format=trace_format, block_id=block_id,
+                replay_deepest_first=replay_order == "deepest-first", verify=verify, pin=pin,
+                engine_metrics=engine_metrics, seed=-1 if seed is None else seed)
+    runs = [(a, b) for a in algos for b in blocks]
+    results: list[dict | None] = [None] * len(runs)
+
+    def finish(i: int, row: dict) -> None:
+        a, b = runs[i]
+        r = results[i] = dict(algorithm=a, trace=trace, cache_size_blocks=b,
+                              cache_bytes=block_bytes and b * block_bytes, block_size_tokens=tokens,
+                              cost_model=cost_model, model=model and model.name, algo_params=algo_params,
+                              block_id=block_id, replay_order=replay_order, seed=seed, **row)
+        if csv_path:
+            _append_csv(csv_path, r)
+        if progress:
+            engine = r["engine_compute_saving_ratio"]
+            print(f"[{sum(x is not None for x in results)}/{len(runs)}] {a} @ {b} blocks: "
+                  f"hit {r['block_hit_ratio']:.4f}, saving {r['compute_saving_ratio']:.4f}"
+                  + ("" if engine is None else f", engine saving {engine:.4f}")
+                  + f" ({r['elapsed_s']:.0f}s)", file=sys.stderr, flush=True)
+
+    n_jobs = jobs or min(len(runs), os.cpu_count() or 1)
+    if n_jobs == 1:
+        for i, (a, b) in enumerate(runs):
+            finish(i, _run(trace, b, a, core))
+    else:
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(n_jobs, mp_context=ctx, initializer=_worker_init) as pool:
+            futures = {pool.submit(_run, trace, b, a, core): i for i, (a, b) in enumerate(runs)}
+            try:
+                for f in as_completed(futures):
+                    finish(futures[f], f.result())
+            except BrokenProcessPool as e:
+                lost = ", ".join(f"{a}@{b}" for (a, b), r in zip(runs, results) if r is None)
+                raise RuntimeError(f"a worker process died (see its stderr); not finished: {lost}") from e
     for r in results:
         if r["n_unexpected_evictions"]:
             warnings.warn(f"{r['algorithm']}: evictions during replay; its numbers are not trustworthy",
@@ -190,70 +231,9 @@ def simulate(
     return results
 
 
-def sweep(
-    trace: str | os.PathLike,
-    algorithms: str | Sequence[str],
-    cache_sizes: int | str | Sequence[int | str],
-    *,
-    jobs: int | None = None,
-    csv_path: str | os.PathLike | None = None,
-    progress: bool = True,
-    model: ModelSpec | str | None = None,
-    kv_bytes_per_token: int | None = None,
-    cost_model: str | None = None,
-    block_size_tokens: int | None = None,
-    algo_params: str = "",
-    trace_format: str = "auto",
-    block_id: str = "prefix",
-    replay_order: str = "deepest-first",
-    verify: bool = True,
-    pin: bool = True,
-    engine_metrics: bool = True,
-    seed: int | None = None,
-) -> list[dict]:
-    """:func:`simulate` every algorithm at every cache size, in parallel.
-
-    Each (algorithm, cache size) runs in its own worker process, so a worker
-    that dies (PrefixSim aborts on some errors, e.g. ``s3fifo`` below 10
-    blocks) loses only its own run. Workers are spawned, so a script calling
-    this needs ``if __name__ == "__main__":``.
-
-    Args:
-        jobs: worker processes; default one per core, up to the number of runs.
-        csv_path: append each result to this CSV as it finishes.
-        progress: print a line per finished run to stderr.
-        Other arguments: as for :func:`simulate`.
-
-    Returns the results in the order of ``algorithms`` x ``cache_sizes``.
-    """
-    trace, model = _trace(trace), _model(model)  # once, not in every worker
-    options = dict(model=model, kv_bytes_per_token=kv_bytes_per_token, cost_model=cost_model,
-                   block_size_tokens=block_size_tokens, algo_params=algo_params, trace_format=trace_format,
-                   block_id=block_id, replay_order=replay_order, verify=verify, pin=pin,
-                   engine_metrics=engine_metrics, seed=seed)
-    algos = algorithms.split(",") if isinstance(algorithms, str) else list(algorithms)
-    sizes = [cache_sizes] if isinstance(cache_sizes, (int, str)) else list(cache_sizes)
-    tasks = [(a.strip(), s) for a in algos for s in sizes]
-    done = {}
-    ctx = multiprocessing.get_context("spawn")
-    n_jobs = jobs or min(len(tasks), os.cpu_count() or 1)
-    with ProcessPoolExecutor(n_jobs, mp_context=ctx, initializer=_worker_init) as pool:
-        futures = {pool.submit(simulate, trace, s, a, **options): (a, s) for a, s in tasks}
-        try:
-            for f in as_completed(futures):
-                (r,) = done[futures[f]] = f.result()
-                if csv_path:
-                    _append_csv(csv_path, r)
-                if progress:
-                    engine = r["engine_compute_saving_ratio"]
-                    print(f"[{len(done)}/{len(tasks)}] {r['algorithm']} @ {r['cache_size_blocks']} blocks: "
-                          f"hit {r['block_hit_ratio']:.4f}, saving {r['compute_saving_ratio']:.4f}"
-                          + ("" if engine is None else f", engine saving {engine:.4f}")
-                          + f" ({r['elapsed_s']:.0f}s)", file=sys.stderr, flush=True)
-        except BrokenProcessPool as e:
-            lost = ", ".join(f"{a}@{s}" for a, s in tasks if (a, s) not in done)
-            raise RuntimeError(f"a worker process died (see its stderr); not finished: {lost}") from e
-    return [done[t][0] for t in tasks]
+def _run(trace: str, blocks: int, algorithm: str, core: dict) -> dict:
+    (row,) = _core.simulate(trace, blocks, [algorithm], **core)
+    return row
 
 
 def _worker_init() -> None:

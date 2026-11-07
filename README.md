@@ -12,7 +12,7 @@ match its CLI. The Python layer adds:
 
 - cache sizes in bytes (`"24GiB"`), from a model's KV size and the trace's block size;
 - models from their Hugging Face config: KV bytes per token and a prefill-FLOPs cost model;
-- parallel sweeps, one process per (algorithm, cache size);
+- every algorithm at every cache size in one call, in parallel worker processes;
 - engine metrics: hits before each request's first miss, which is what vLLM and SGLang reuse.
 
 ## Install
@@ -47,19 +47,21 @@ cached (`HF_HOME`):
 import prefixsim
 
 # a trace ("freeinference", 76 MB, or "chutes", 230 MB); the cache in blocks, as the CLI
-results = prefixsim.simulate("freeinference", "64k", "lru,s3fifo", cost_model="qwen3coder30b_blksz_16")
+(r,) = prefixsim.simulate("freeinference", "64k", "lru", cost_model="qwen3coder30b_blksz_16")
 
-# the cache in bytes: the model sets a block's size and the cost model
-if __name__ == "__main__":  # sweep spawns worker processes
-    results = prefixsim.sweep("freeinference", ["lru", "s3fifo", "random_compute"],
-                              ["24GiB", "48GiB", "96GiB"], model="Qwen/Qwen3-Coder-30B-A3B-Instruct",
-                              csv_path="results.csv")
+# every algorithm at every size, in parallel; sizes in bytes: the model sets a
+# block's size and the cost model
+if __name__ == "__main__":  # several runs spawn worker processes
+    results = prefixsim.simulate("freeinference", ["24GiB", "48GiB", "96GiB"],
+                                 ["lru", "s3fifo", "random_compute"],
+                                 model="Qwen/Qwen3-Coder-30B-A3B-Instruct", csv_path="results.csv")
 ```
 
 A local file works as `trace` too, and a `ModelSpec` as `model`
 (`ModelSpec.from_hf(id, revision=...)` to pin a revision,
 `ModelSpec(name, kv_bytes_per_token, ...)` for a model not on the Hub).
-Each result is a dict. `pandas.DataFrame(results)` gives a table.
+Each run gives a dict. `pandas.DataFrame(results)` gives a table; `jobs=1` runs
+them one after another in this process instead.
 `prefixsim.convert("trace.jsonl", "trace.lcp.zst")` turns a JSONL trace into
 lcp, which streams instead of being loaded whole.
 
@@ -97,8 +99,8 @@ parents, LRU leaves gaps too.
   every run, so a run matches the CLI whatever ran before it; `seed=` picks
   another stream.
 - **Aborts.** PrefixSim aborts the process on some errors, for example `s3fifo`
-  below 10 blocks. `sweep` runs each simulation in its own process and reports
-  which runs were lost.
+  below 10 blocks. With several runs each has its own worker process, and the
+  error says which runs were lost.
 - **Sizes.** `"64g"` is refused, because the CLI reads it as 2³⁰ × 64 blocks.
   Write `"64GiB"`.
 - **tcmalloc** is left out: it cannot be loaded into a running Python process.
