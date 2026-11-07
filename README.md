@@ -1,5 +1,11 @@
 # PrefixSim-python
 
+[![PyPI](https://img.shields.io/pypi/v/prefixsim)](https://pypi.org/project/prefixsim/)
+[![Python](https://img.shields.io/pypi/pyversions/prefixsim)](https://pypi.org/project/prefixsim/)
+[![Platforms](https://img.shields.io/badge/platform-Linux%20x86__64%20%7C%20Linux%20aarch64%20%7C%20macOS%20arm64-blue)](#install)
+[![wheels](https://github.com/haochengxia/PrefixSim-python/actions/workflows/wheels.yml/badge.svg)](https://github.com/haochengxia/PrefixSim-python/actions/workflows/wheels.yml)
+[![License](https://img.shields.io/github/license/haochengxia/PrefixSim-python)](LICENSE)
+
 Python bindings for [PrefixSim](https://github.com/cacheMon/PrefixSim). The
 simulation is PrefixSim's own C++ (the `extern/PrefixSim` submodule), so results
 match its CLI. The Python layer adds:
@@ -21,29 +27,38 @@ uv run --with prefixsim python script.py   # or run a script without installing
 
 or with pip: `pip install prefixsim`.
 
-Wheels are prebuilt for Python 3.10–3.14 on Linux (x86_64 and aarch64, glibc
-2.34+: Ubuntu 22.04+, Debian 12+, RHEL 9+) and Apple-silicon macOS 15+, with
-PrefixSim, libCacheSim, glib and zstd inside: there is nothing to compile or
-install first. Elsewhere the installer builds from source, which needs a C++17
-compiler, glib, zstd and Python's headers.
+Prebuilt wheels, with PrefixSim, libCacheSim, glib and zstd inside, so there
+is nothing to compile or install first:
+
+| OS | Architectures | Python |
+|---|---|---|
+| Linux, glibc 2.34+ (Ubuntu 22.04+, Debian 12+, RHEL 9+) | x86_64, aarch64 | 3.10–3.14 |
+| macOS 15+ | arm64 (Apple silicon) | 3.10–3.14 |
+
+Elsewhere the installer builds from source, which needs a C++17 compiler,
+glib, zstd and Python's headers.
 
 ## Use
+
+Traces and models are given by their Hugging Face names, downloaded once and
+cached (`HF_HOME`):
 
 ```python
 import prefixsim
 
-trace = prefixsim.download_trace("freeinference")  # 76 MB, cached by Hugging Face
+# a trace ("freeinference", 76 MB, or "chutes", 230 MB); the cache in blocks, as the CLI
+results = prefixsim.simulate("freeinference", "64k", "lru,s3fifo", cost_model="qwen3coder30b_blksz_16")
 
-# blocks, as the CLI
-results = prefixsim.simulate(trace, "16k", "lru,s3fifo", cost_model="qwen3coder30b_blksz_16")
-
-# bytes: the model sets the block's size and the cost model
-model = prefixsim.ModelSpec.from_hf("Qwen/Qwen3-Coder-30B-A3B-Instruct")
+# the cache in bytes: the model sets a block's size and the cost model
 if __name__ == "__main__":  # sweep spawns worker processes
-    results = prefixsim.sweep(trace, ["lru", "s3fifo", "random_compute"],
-                              ["24GiB", "48GiB", "96GiB"], model=model, csv_path="results.csv")
+    results = prefixsim.sweep("freeinference", ["lru", "s3fifo", "random_compute"],
+                              ["24GiB", "48GiB", "96GiB"], model="Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                              csv_path="results.csv")
 ```
 
+A local file works as `trace` too, and a `ModelSpec` as `model`
+(`ModelSpec.from_hf(id, revision=...)` to pin a revision,
+`ModelSpec(name, kv_bytes_per_token, ...)` for a model not on the Hub).
 Each result is a dict. `pandas.DataFrame(results)` gives a table.
 `prefixsim.convert("trace.jsonl", "trace.lcp.zst")` turns a JSONL trace into
 lcp, which streams instead of being loaded whole.
