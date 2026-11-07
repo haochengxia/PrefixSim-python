@@ -35,6 +35,11 @@ if(PREFIXSIM_STATIC_GLIB)
         INTERFACE_LINK_LIBRARIES "${glib_deps};Threads::Threads;m")
     message(STATUS "glib linked statically: ${glib_archive} ${glib_deps}")
 endif()
+# libCacheSim's xxhash (0.7.4) reads keys through a packed union when GCC targets
+# ARM, which breaks strict aliasing: on Linux aarch64 at -O3 the hash table then
+# hashes stale stack bytes and cannot find what it just inserted. Use the memcpy
+# reads that x86 and clang already get; they compile to the same loads.
+add_compile_definitions(XXH_FORCE_MEMORY_ACCESS=0)
 set(PREFIXSIM_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${PREFIXSIM_DIR} ${CMAKE_BINARY_DIR}/PrefixSim EXCLUDE_FROM_ALL)
 # upstream's -Werror should not fail the build on a newer compiler
