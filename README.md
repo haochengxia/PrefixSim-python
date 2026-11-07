@@ -11,15 +11,21 @@ match its CLI. The Python layer adds:
 
 ## Install
 
+With [uv](https://docs.astral.sh/uv/) (recommended):
+
 ```bash
-pip install prefixsim
+uv add prefixsim                           # add it to a uv project
+uv pip install prefixsim                   # or install into the active environment
+uv run --with prefixsim python script.py   # or run a script without installing
 ```
 
+or with pip: `pip install prefixsim`.
+
 Wheels are prebuilt for Python 3.10–3.14 on Linux (x86_64 and aarch64, glibc
-2.34+: Ubuntu 22.04+, Debian 12+, RHEL 9+) and Apple-silicon macOS, with
+2.34+: Ubuntu 22.04+, Debian 12+, RHEL 9+) and Apple-silicon macOS 15+, with
 PrefixSim, libCacheSim, glib and zstd inside: there is nothing to compile or
-install first. Elsewhere pip builds from source, which needs a C++17 compiler,
-glib, zstd and Python's headers.
+install first. Elsewhere the installer builds from source, which needs a C++17
+compiler, glib, zstd and Python's headers.
 
 ## Use
 
