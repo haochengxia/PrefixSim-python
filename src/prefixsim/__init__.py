@@ -51,8 +51,8 @@ def supported_algorithms() -> list[str]:
 def trace_info(trace: str | os.PathLike, trace_format: str = "auto") -> dict:
     """A trace's header: ``annotated``, ``n_requests``, ``n_blocks``,
     ``block_size_tokens``, ``max_blocks_per_request`` (``None`` if not recorded,
-    as for JSONL)."""
-    return _core.trace_info(_existing(trace), trace_format)
+    as for JSONL). ``trace`` is a file or a trace name, as for :func:`simulate`."""
+    return _core.trace_info(_trace(trace), trace_format)
 
 
 def convert(input: str | os.PathLike, output: str | os.PathLike, block_size_tokens: int = 16) -> dict:
@@ -100,7 +100,7 @@ def simulate(
     cache_size: int | str,
     algorithms: str | Sequence[str] = "lru",
     *,
-    model: ModelSpec | None = None,
+    model: ModelSpec | str | None = None,
     kv_bytes_per_token: int | None = None,
     cost_model: str | None = None,
     block_size_tokens: int | None = None,
@@ -116,12 +116,15 @@ def simulate(
     """Simulate eviction algorithms over a trace, one after another.
 
     Args:
-        trace: an lcp trace (``.lcp``, ``.lcp.zst``; streamed) or a JSONL one
-            (loaded whole; :func:`convert` it first).
+        trace: a trace name, ``"freeinference"`` or ``"chutes"``, downloaded
+            with :func:`download_trace`; or a file: lcp (``.lcp``, ``.lcp.zst``;
+            streamed) or JSONL (loaded whole; :func:`convert` it first).
         cache_size: blocks or bytes, as for :func:`parse_cache_size`. Bytes need
             ``model`` or ``kv_bytes_per_token``.
         algorithms: a name, ``"lru,s3fifo"`` or a list; see :func:`supported_algorithms`.
-        model: a :class:`ModelSpec`. Sets the KV bytes of a block and, unless
+        model: a Hugging Face model id (``"Qwen/Qwen3-Coder-30B-A3B-Instruct"``,
+            read with :meth:`ModelSpec.from_hf`; ``HF_TOKEN`` for gated ones) or
+            a :class:`ModelSpec`. Sets the KV bytes of a block and, unless
             ``cost_model`` is given, the cost model, at the trace's block size.
         kv_bytes_per_token: KV bytes of one token, instead of ``model``.
         cost_model: ``uniform``, ``position``, ``qwen3coder30b_blksz_16``,
@@ -152,7 +155,7 @@ def simulate(
         raise ValueError("replay_order: deepest-first | prefix-order")
     if model is not None and kv_bytes_per_token is not None:
         raise ValueError("pass model or kv_bytes_per_token, not both")
-    trace = _existing(trace)
+    trace, model = _trace(trace), _model(model)
     info = _core.trace_info(trace, trace_format)
     tokens = info["block_size_tokens"] or block_size_tokens
     if block_size_tokens and tokens != block_size_tokens:
@@ -195,7 +198,7 @@ def sweep(
     jobs: int | None = None,
     csv_path: str | os.PathLike | None = None,
     progress: bool = True,
-    model: ModelSpec | None = None,
+    model: ModelSpec | str | None = None,
     kv_bytes_per_token: int | None = None,
     cost_model: str | None = None,
     block_size_tokens: int | None = None,
@@ -223,6 +226,7 @@ def sweep(
 
     Returns the results in the order of ``algorithms`` x ``cache_sizes``.
     """
+    trace, model = _trace(trace), _model(model)  # once, not in every worker
     options = dict(model=model, kv_bytes_per_token=kv_bytes_per_token, cost_model=cost_model,
                    block_size_tokens=block_size_tokens, algo_params=algo_params, trace_format=trace_format,
                    block_id=block_id, replay_order=replay_order, verify=verify, pin=pin,
@@ -274,3 +278,20 @@ def _existing(path) -> str:
     if not os.path.isfile(path):  # libCacheSim would abort the process
         raise FileNotFoundError(path)
     return path
+
+
+def _trace(trace) -> str:
+    """A local file, else a bare name (no directory) is a trace of TRACES_REPO."""
+    path = os.fspath(trace)
+    if os.path.isfile(path) or os.path.dirname(path):
+        return _existing(path)
+    from huggingface_hub.utils import EntryNotFoundError
+
+    try:
+        return download_trace(path)
+    except EntryNotFoundError:
+        raise FileNotFoundError(f"{path}: no such file, nor a trace in {TRACES_REPO}") from None
+
+
+def _model(model: ModelSpec | str | None) -> ModelSpec | None:
+    return ModelSpec.from_hf(model) if isinstance(model, str) else model

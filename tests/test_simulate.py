@@ -63,6 +63,21 @@ def test_sizes(tmp_path, lru_trace):
             prefixsim.parse_cache_size(bad, block_bytes)
 
 
+def test_hf_names(tmp_path, lru_trace, monkeypatch):
+    # a bare name is a trace of the dataset, a str model a Hugging Face id; both stubbed, no network
+    lcp = tmp_path / "lru.lcp.zst"
+    prefixsim.convert(lru_trace, lcp)
+    fetched = []
+    monkeypatch.setattr(prefixsim, "download_trace", lambda name: fetched.append(name) or str(lcp))
+    spec = prefixsim.ModelSpec("org/model", 1024, active_params=10**9, attn_flops_per_token=10**5)
+    monkeypatch.setattr(prefixsim.ModelSpec, "from_hf", classmethod(lambda cls, repo: spec))
+    (r,) = prefixsim.simulate("lru", "64KiB", "lru", model="org/model")
+    assert fetched == ["lru"] and r["trace"] == str(lcp)
+    assert (r["model"], r["cache_size_blocks"], r["cost_model"]) == ("org/model", 4, spec.cost_model(16, 3))
+    monkeypatch.chdir(tmp_path)  # a file in the working directory comes first
+    assert prefixsim.trace_info("lru.lcp.zst")["n_requests"] == 5 and fetched == ["lru"]
+
+
 def test_bad_inputs(tmp_path, lru_trace):
     with pytest.raises(ValueError, match="unsupported"):
         prefixsim.simulate(lru_trace, 4, "lur")
