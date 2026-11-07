@@ -46,6 +46,11 @@ find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
 pybind11_add_module(_core MODULE csrc/bindings.cpp)
 target_link_libraries(_core PRIVATE prefixsim_lib)
+# libCacheSim links glib by name and adds its directory only in its own scope
+# (see PrefixSim's CMakeLists); glib is off the default path on macOS
+get_directory_property(glib_dirs DIRECTORY ${PREFIXSIM_DIR}/libCacheSim
+    DEFINITION GLib_LIBRARY_DIRS)
+target_link_directories(_core PRIVATE ${glib_dirs})
 if(PREFIXSIM_STATIC_GLIB)
     target_link_options(_core PRIVATE -Wl,--exclude-libs,ALL)  # keep the bundled glib private
 endif()
