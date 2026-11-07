@@ -1,0 +1,69 @@
+# Build and test wheels on every push; publish them on a release.
+#   push / pull request:   build + test every wheel and the sdist
+#   workflow_dispatch:     the same, then publish to TestPyPI
+#   release published:     the same, then publish to PyPI
+# Publishing uses PyPI trusted publishing: no token, but the PyPI project needs
+# this repo, this workflow and the environment (pypi / testpypi) registered.
+name: wheels
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 and aarch64 Linux (manylinux_2_34), Apple silicon macOS
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      # builds cp310-cp314 and runs tests/ against each wheel ([tool.cibuildwheel])
+      - uses: pypa/cibuildwheel@v4.3.5
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: astral-sh/setup-uv@v10
+      - run: uv build --sdist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    needs: [wheels, sdist]
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'release' && 'pypi' || 'testpypi' }}
+      url: ${{ github.event_name == 'release' && 'https://pypi.org/p/prefixsim' || 'https://test.pypi.org/p/prefixsim' }}
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ github.event_name == 'release' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}

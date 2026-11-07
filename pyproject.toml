@@ -1,0 +1,70 @@
+[build-system]
+requires = ["scikit-build-core>=0.11", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "prefixsim"
+version = "0.1.0"
+description = "Python bindings for PrefixSim, the KV-block prefix-cache simulator"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+# the wheels contain PrefixSim, libCacheSim, GLib, PCRE, sysprof-capture, zstd: third_party/NOTICE.md
+license-files = ["LICENSE", "third_party/*", "extern/PrefixSim/LICENSE",
+                 "extern/PrefixSim/libCacheSim/LICENSE", "extern/PrefixSim/libCacheSim/NOTICE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+]
+# for ModelSpec.from_hf and download_trace
+dependencies = ["huggingface_hub>=0.20"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/haochengxia/PrefixSim-python"
+Issues = "https://github.com/haochengxia/PrefixSim-python/issues"
+PrefixSim = "https://github.com/cacheMon/PrefixSim"
+
+[tool.scikit-build]
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/prefixsim"]
+cmake.build-type = "Release"
+# the sdist keeps only what the build needs (libCacheSim's data/ alone is 111 MB)
+sdist.exclude = [
+    ".github", "tests/__pycache__",
+    "extern/PrefixSim/doc", "extern/PrefixSim/test",
+    "extern/PrefixSim/libCacheSim/data", "extern/PrefixSim/libCacheSim/doc",
+    "extern/PrefixSim/libCacheSim/example", "extern/PrefixSim/libCacheSim/libCacheSim-node",
+    "extern/PrefixSim/libCacheSim/test", "extern/PrefixSim/libCacheSim/scripts",
+    "extern/PrefixSim/libCacheSim/dockerfile",
+]
+
+[tool.cibuildwheel]
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+skip = ["*-musllinux*"]
+test-requires = ["pytest"]
+test-command = "pytest {project}/tests -q"
+
+[tool.cibuildwheel.linux]
+# 2_34 (AlmaLinux 9): libCacheSim needs glib >= 2.68, 2_28 has 2.56
+manylinux-x86_64-image = "manylinux_2_34"
+manylinux-aarch64-image = "manylinux_2_34"
+# static glib (and its pcre, sysprof-capture) from CRB: slim images have no glib
+before-all = "dnf install -y --enablerepo=crb glib2-devel glib2-static pcre-static sysprof-capture-devel libzstd-devel"
+config-settings = { "cmake.define.PREFIXSIM_STATIC_GLIB" = "ON" }
+
+[tool.cibuildwheel.macos]
+before-all = "brew install glib zstd argp-standalone pkg-config"
+# brew's libraries are built for the runner's macOS; delocate needs the wheel to match
+environment = { MACOSX_DEPLOYMENT_TARGET = "15.0" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
