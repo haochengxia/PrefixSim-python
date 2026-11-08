@@ -36,9 +36,10 @@ if(PREFIXSIM_STATIC_GLIB)
     message(STATUS "glib linked statically: ${glib_archive} ${glib_deps}")
 endif()
 # libCacheSim's xxhash (0.7.4) reads keys through a packed union when GCC targets
-# ARM, which breaks strict aliasing: on Linux aarch64 at -O3 the hash table then
-# hashes stale stack bytes and cannot find what it just inserted. Use the memcpy
-# reads that x86 and clang already get; they compile to the same loads.
+# ARM, which breaks strict aliasing: on Linux aarch64 at -O3 GCC hashes every
+# inserted object as id 0, so lookups miss it. Use the memcpy reads that x86 and
+# clang already get; they compile to the same loads. Fixed in libCacheSim by
+# 1a1a11a/libCacheSim#383; drop this once PrefixSim's libCacheSim includes it.
 add_compile_definitions(XXH_FORCE_MEMORY_ACCESS=0)
 set(PREFIXSIM_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${PREFIXSIM_DIR} ${CMAKE_BINARY_DIR}/PrefixSim EXCLUDE_FROM_ALL)
