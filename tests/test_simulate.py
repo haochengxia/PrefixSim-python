@@ -42,7 +42,8 @@ def test_lcp_matches_jsonl(tmp_path, gap_trace):
     assert prefixsim.convert(gap_trace, lcp)["n_blocks"] == 8
     assert prefixsim.trace_info(lcp)["block_size_tokens"] == 16
     algos = "fifo,lru,sieve,random_compute"  # not s3fifo: it aborts below 10 blocks
-    strip = lambda rs: [{k: v for k, v in r.items() if k not in ("trace", "elapsed_s", "block_size_tokens")} for r in rs]
+    keep = lambda d: {k: v for k, v in d.items() if k not in ("trace", "elapsed_s", "block_size_tokens")}
+    strip = lambda rs: [keep(r) | {"intervals": [keep(iv) for iv in r["intervals"]]} for r in rs]
     assert strip(prefixsim.simulate(gap_trace, 3, algos)) == strip(prefixsim.simulate(lcp, 3, algos))
 
 
@@ -87,7 +88,24 @@ def test_bad_inputs(tmp_path, lru_trace):
         prefixsim.simulate(tmp_path / "missing.lcp.zst", 4, "lru")
 
 
-def test_grid(tmp_path, gap_trace):
+def test_intervals(lru_trace, capsys):
+    # requests at t = 0..4 s; every 2 s: r0-r2 (9 blocks, 5 hits), then r3-r4 (5 blocks, 2 hits)
+    (r,) = prefixsim.simulate(lru_trace, 4, "lru", report_interval=2)
+    ivs = r["intervals"]
+    assert [iv["trace_time_s"] for iv in ivs] == [2, 4]
+    assert [(iv["interval_n_blocks"], iv["interval_block_hit_ratio"]) for iv in ivs] == [(9, 5 / 9), (5, 2 / 5)]
+    assert (ivs[-1]["block_hit_ratio"], ivs[-1]["engine_hit_ratio"]) == (r["block_hit_ratio"], r["engine_hit_ratio"])
+    assert "lru @ 4 blocks, 0.0 h: hit 0.5556 (interval 0.5556)" in capsys.readouterr().err
+    # the default, a day, gets one report: the rest of the trace
+    (r,) = prefixsim.simulate(lru_trace, 4, "lru", progress=False)
+    assert len(r["intervals"]) == 1 and capsys.readouterr().err == ""
+    (r,) = prefixsim.simulate(lru_trace, 4, "lru", report_interval=None)
+    assert r["intervals"] == []
+    with pytest.raises(ValueError, match="report_interval"):
+        prefixsim.simulate(lru_trace, 4, "lru", report_interval="1w")
+
+
+def test_grid(tmp_path, gap_trace, capsys):
     lcp, out = tmp_path / "gap.lcp.zst", tmp_path / "out.csv"
     prefixsim.convert(gap_trace, lcp)
     expected = [("fifo", 3), ("fifo", 4), ("lru", 3), ("lru", 4)]
@@ -95,8 +113,10 @@ def test_grid(tmp_path, gap_trace):
     assert [(r["algorithm"], r["cache_size_blocks"]) for r in parallel] == expected
     assert parallel[0]["engine_hit_ratio"] == 1 / 8
     assert len(out.read_text().splitlines()) == 5
+    assert "  fifo @ 3 blocks, 0.0 h (100.0%): hit 0.2500" in capsys.readouterr().err  # from a worker
     in_process = prefixsim.simulate(lcp, [3, 4], "fifo,lru", jobs=1)
-    drop = lambda r: {k: v for k, v in r.items() if k != "elapsed_s"}
+    no_time = lambda d: {k: v for k, v in d.items() if k != "elapsed_s"}
+    drop = lambda r: no_time(r) | {"intervals": [no_time(iv) for iv in r["intervals"]]}
     assert [drop(r) for r in in_process] == [drop(r) for r in parallel]
     # libCacheSim aborts on an S3-FIFO below 10 blocks: only its worker dies
     with pytest.raises(RuntimeError, match="worker process died.*s3fifo@3"):

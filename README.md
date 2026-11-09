@@ -38,6 +38,20 @@ is nothing to compile or install first:
 Elsewhere the installer builds from source, which needs a C++17 compiler,
 glib, zstd and Python's headers.
 
+### The `dev` branch
+
+`dev` builds on [haochengxia/PrefixSim `dev`](https://github.com/haochengxia/PrefixSim/tree/dev)
+and [haochengxia/libCacheSim `perf/evict-n`](https://github.com/haochengxia/libCacheSim/tree/perf/evict-n),
+changes not yet in PrefixSim and libCacheSim: a flat set for the per-request
+block sets, eviction that steps over a request's pinned blocks once instead of
+once per block, and interval reports (below). Results are the same; on
+freeinference at 64k blocks, FIFO runs 3.7x and LRU 2.5x faster. It has no
+wheels; build it from source:
+
+```bash
+uv pip install "prefixsim @ git+https://github.com/haochengxia/PrefixSim-python@dev"
+```
+
 ## Use
 
 Traces and models are given by their Hugging Face names, downloaded once and
@@ -62,6 +76,16 @@ A local file works as `trace` too, and a `ModelSpec` as `model`
 `ModelSpec(name, kv_bytes_per_token, ...)` for a model not on the Hub).
 Each run gives a dict. `pandas.DataFrame(results)` gives a table; `jobs=1` runs
 them one after another in this process instead.
+
+While they run, runs report every `report_interval` of trace time (default a
+day, as cachesim), and print the latest report at most every 5 seconds:
+
+```
+  lru @ 65536 blocks, 24.0 d (33.6%): hit 0.7501 (interval 0.7257), saving 0.7501 (interval 0.7257), engine saving 0.7501 (interval 0.7257) (11s)
+```
+
+Every report is kept in the run's `intervals`, one dict each, for plotting the
+ratios over time; `report_interval="1h"` makes them finer, `None` turns them off.
 `prefixsim.convert("trace.jsonl", "trace.lcp.zst")` turns a JSONL trace into
 lcp, which streams instead of being loaded whole.
 

@@ -1,3 +1,4 @@
 [submodule "extern/PrefixSim"]
 	path = extern/PrefixSim
-	url = https://github.com/cacheMon/PrefixSim.git
+	url = https://github.com/haochengxia/PrefixSim.git
+	branch = dev

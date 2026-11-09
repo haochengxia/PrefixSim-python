@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <optional>
 
 #include "cost_model.hpp"
 #include "lcp_writer.hpp"
@@ -105,6 +106,41 @@ class EngineMatch : public TraceReader {
   request_t probe_;
 };
 
+// One interval report (SimulatorConfig::on_report), with the engine counts at
+// the time and over the interval.
+struct Interval {
+  IntervalReport r;
+  int64_t engine_hits = 0, interval_engine_hits = 0;
+  double engine_saved = 0, interval_engine_saved = 0;
+};
+
+py::object ratio_or_none(bool on, double num, double den) {
+  return on ? py::object(py::float_(den > 0 ? num / den : 0)) : py::none();
+}
+
+py::dict interval_dict(const Interval &iv, bool engine) {
+  const Stats &t = iv.r.total, &i = iv.r.interval;
+  py::dict d;
+  d["trace_time_s"] = iv.r.trace_time_s;
+  d["elapsed_s"] = iv.r.elapsed_s;
+  d["n_requests"] = t.n_requests;
+  d["n_requests_skipped"] = t.n_requests_skipped;
+  d["n_blocks"] = t.n_blocks;
+  d["block_hit_ratio"] = t.block_hit_ratio();
+  d["compute_saving_ratio"] = t.compute_saving_ratio();
+  d["engine_hit_ratio"] = ratio_or_none(engine, double(iv.engine_hits), double(t.n_blocks));
+  d["engine_compute_saving_ratio"] = ratio_or_none(engine, iv.engine_saved, t.total_cost);
+  d["interval_n_requests"] = i.n_requests;
+  d["interval_n_blocks"] = i.n_blocks;
+  d["interval_block_hit_ratio"] = i.block_hit_ratio();
+  d["interval_compute_saving_ratio"] = i.compute_saving_ratio();
+  d["interval_engine_hit_ratio"] =
+      ratio_or_none(engine, double(iv.interval_engine_hits), double(i.n_blocks));
+  d["interval_engine_compute_saving_ratio"] =
+      ratio_or_none(engine, iv.interval_engine_saved, i.total_cost);
+  return d;
+}
+
 py::dict trace_info(const std::string &path, const std::string &trace_format) {
   auto r = open(path, parse_format(path, trace_format));
   py::dict d;
@@ -120,7 +156,7 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
                   const std::vector<std::string> &algorithms, const std::string &cost_spec,
                   const std::string &params, const std::string &trace_format,
                   const std::string &block_id_name, bool deepest_first, bool verify, bool pin,
-                  bool engine, int64_t seed) {
+                  bool engine, int64_t seed, double report_interval_s, py::object on_report) {
   std::string error;
   CostModel cost;
   if (!CostModel::parse(cost_spec, cost, error)) throw py::value_error("cost_model: " + error);
@@ -154,6 +190,8 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
     SimulatorConfig cfg;
     int64_t hits = 0;
     double saved = 0, secs = 0;
+    std::vector<Interval> intervals;
+    std::optional<py::error_already_set> report_error;  // from on_report, raised after the run
     {
       py::gil_scoped_release nogil;
       if (stream && !reader) reader = open(path, format, block_id);  // a stream is read once per algorithm
@@ -169,8 +207,25 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
       const auto t0 = std::chrono::steady_clock::now();
       bool ok;
       {
-        Simulator sim(cache, cfg);
         EngineMatch em(stream ? reader.get() : nullptr, loaded, cache, cost, cache_blocks);
+        cfg.report_interval_s = report_interval_s;
+        cfg.on_report = [&](const IntervalReport &r) {
+          Interval iv;
+          iv.r = r;
+          iv.engine_hits = em.hits;
+          iv.engine_saved = em.saved;
+          iv.interval_engine_hits = em.hits - (intervals.empty() ? 0 : intervals.back().engine_hits);
+          iv.interval_engine_saved = em.saved - (intervals.empty() ? 0 : intervals.back().engine_saved);
+          intervals.push_back(iv);
+          if (on_report.is_none() || report_error) return;
+          py::gil_scoped_acquire gil;
+          try {
+            on_report(interval_dict(iv, engine));
+          } catch (py::error_already_set &e) {
+            report_error.emplace(std::move(e));  // stop calling it
+          }
+        };
+        Simulator sim(cache, cfg);
         ok = engine ? sim.run(em, error) : stream ? sim.run(*reader, error) : sim.run(loaded, error);
         s = sim.stats();
         hits = em.hits;
@@ -181,6 +236,7 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
       reader.reset();
       if (!ok) throw std::runtime_error("[" + algo + "] " + error);
     }
+    if (report_error) throw std::move(*report_error);
     py::dict d;
     d["n_requests"] = s.n_requests;
     d["n_requests_skipped"] = s.n_requests_skipped;
@@ -193,6 +249,9 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
     d["n_unexpected_evictions"] = s.n_unexpected_evictions;
     d["pinned"] = cfg.pin_request_blocks;
     d["elapsed_s"] = secs;
+    py::list rows;
+    for (const Interval &iv : intervals) rows.append(interval_dict(iv, engine));
+    d["intervals"] = rows;
     out.append(d);
   }
   return out;
@@ -229,6 +288,7 @@ PYBIND11_MODULE(_core, m) {
   m.def("simulate", &simulate, arg("path"), arg("cache_size_blocks"), arg("algorithms"),
         arg("cost_model") = "uniform", arg("algo_params") = "", arg("trace_format") = "auto",
         arg("block_id") = "prefix", arg("replay_deepest_first") = true, arg("verify") = true,
-        arg("pin") = true, arg("engine_metrics") = true, arg("seed") = -1);
+        arg("pin") = true, arg("engine_metrics") = true, arg("seed") = -1,
+        arg("report_interval_s") = 0.0, arg("on_report") = py::none());
   m.def("convert", &convert, arg("input"), arg("output"), arg("block_size_tokens") = 16);
 }

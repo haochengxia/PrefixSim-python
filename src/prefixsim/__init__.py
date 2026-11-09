@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import sys
+import threading
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -23,6 +24,8 @@ __all__ = ["ModelSpec", "convert", "download_trace", "parse_cache_size", "simula
 _BLOCKS = {"": 1, "k": 2**10, "m": 2**20}  # as the CLI
 _BYTES = {"b": 1, "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40,
           "kb": 10**3, "mb": 10**6, "gb": 10**9, "tb": 10**12}
+_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}  # as the CLI's --report-interval
+_PRINT_EVERY_S = 5  # wall-clock seconds between a run's interval lines
 
 
 TRACES_REPO = "harvardMadsys/2026_prefixcache"
@@ -115,6 +118,7 @@ def simulate(
     jobs: int | None = None,
     csv_path: str | os.PathLike | None = None,
     progress: bool = True,
+    report_interval: float | str | None = "1d",
 ) -> list[dict]:
     """Simulate every algorithm at every cache size over a trace.
 
@@ -155,14 +159,22 @@ def simulate(
             ``prefixsim`` process does, so results match the CLI.
         jobs: worker processes for several runs; default one per run, up to the
             number of cores. ``1`` runs them one after another in this process.
-        csv_path: append each result to this CSV as it finishes.
-        progress: print a line per finished run to stderr.
+        csv_path: append each result to this CSV as it finishes (without
+            ``intervals``).
+        progress: print a line per finished run to stderr, and while it runs,
+            its latest interval report at most every 5 seconds.
+        report_interval: trace time between interval reports, as cachesim's
+            ``report_interval``: seconds, or ``"30m"``, ``"6h"``, ``"1d"``.
+            ``None`` or ``0`` for none.
 
     Returns:
         One dict per run, by algorithm, then cache size: the settings above,
         PrefixSim's ``block_hit_ratio`` and ``compute_saving_ratio`` (every
         resident block counts, past a miss too), the engine ratios, request and
-        eviction counts, ``elapsed_s``.
+        eviction counts, ``elapsed_s``, and ``intervals``: one dict per
+        ``report_interval`` of trace time, plus one for the rest, with
+        ``trace_time_s``, ``elapsed_s``, the ratios so far and the same ratios
+        over the interval (``interval_block_hit_ratio``, ...).
     """
     if replay_order not in ("deepest-first", "prefix-order"):
         raise ValueError("replay_order: deepest-first | prefix-order")
@@ -189,9 +201,11 @@ def simulate(
     if info["annotated"] and (info["max_blocks_per_request"] or 0) > min(blocks):
         warnings.warn("a request is larger than the cache, so the whole trace is loaded into memory")
 
+    interval_s = _seconds(report_interval)
     core = dict(cost_model=cost_model, algo_params=algo_params, trace_format=trace_format, block_id=block_id,
                 replay_deepest_first=replay_order == "deepest-first", verify=verify, pin=pin,
-                engine_metrics=engine_metrics, seed=-1 if seed is None else seed)
+                engine_metrics=engine_metrics, seed=-1 if seed is None else seed, report_interval_s=interval_s)
+    live = progress and interval_s > 0
     runs = [(a, b) for a in algos for b in blocks]
     results: list[dict | None] = [None] * len(runs)
 
@@ -202,7 +216,7 @@ def simulate(
                               cost_model=cost_model, model=model and model.name, algo_params=algo_params,
                               block_id=block_id, replay_order=replay_order, seed=seed, **row)
         if csv_path:
-            _append_csv(csv_path, r)
+            _append_csv(csv_path, {k: v for k, v in r.items() if k != "intervals"})
         if progress:
             engine = r["engine_compute_saving_ratio"]
             print(f"[{sum(x is not None for x in results)}/{len(runs)}] {a} @ {b} blocks: "
@@ -210,20 +224,31 @@ def simulate(
                   + ("" if engine is None else f", engine saving {engine:.4f}")
                   + f" ({r['elapsed_s']:.0f}s)", file=sys.stderr, flush=True)
 
+    label = lambda a, b: (f"{a} @ {b} blocks", info["n_requests"]) if live else None
     n_jobs = jobs or min(len(runs), os.cpu_count() or 1)
     if n_jobs == 1:
         for i, (a, b) in enumerate(runs):
-            finish(i, _run(trace, b, a, core))
+            finish(i, _run(trace, b, a, core, label(a, b)))
     else:
         ctx = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(n_jobs, mp_context=ctx, initializer=_worker_init) as pool:
-            futures = {pool.submit(_run, trace, b, a, core): i for i, (a, b) in enumerate(runs)}
-            try:
-                for f in as_completed(futures):
-                    finish(futures[f], f.result())
-            except BrokenProcessPool as e:
-                lost = ", ".join(f"{a}@{b}" for (a, b), r in zip(runs, results) if r is None)
-                raise RuntimeError(f"a worker process died (see its stderr); not finished: {lost}") from e
+        # workers send their interval lines here; a thread prints them
+        reports = ctx.Queue() if live else None
+        printer = threading.Thread(target=_print_lines, args=(reports,), daemon=True) if live else None
+        if printer:
+            printer.start()
+        try:
+            with ProcessPoolExecutor(n_jobs, mp_context=ctx, initializer=_worker_init, initargs=(reports,)) as pool:
+                futures = {pool.submit(_run, trace, b, a, core, label(a, b)): i for i, (a, b) in enumerate(runs)}
+                try:
+                    for f in as_completed(futures):
+                        finish(futures[f], f.result())
+                except BrokenProcessPool as e:
+                    lost = ", ".join(f"{a}@{b}" for (a, b), r in zip(runs, results) if r is None)
+                    raise RuntimeError(f"a worker process died (see its stderr); not finished: {lost}") from e
+        finally:
+            if printer:
+                reports.put(None)
+                printer.join()
     for r in results:
         if r["n_unexpected_evictions"]:
             warnings.warn(f"{r['algorithm']}: evictions during replay; its numbers are not trustworthy",
@@ -231,12 +256,63 @@ def simulate(
     return results
 
 
-def _run(trace: str, blocks: int, algorithm: str, core: dict) -> dict:
-    (row,) = _core.simulate(trace, blocks, [algorithm], **core)
+_reports = None  # in a worker: the queue its interval lines go to
+
+
+def _run(trace: str, blocks: int, algorithm: str, core: dict, live: tuple[str, int | None] | None = None) -> dict:
+    on_report = None
+    if live:
+        printed = [-_PRINT_EVERY_S]
+
+        def on_report(r: dict) -> None:
+            if r["elapsed_s"] - printed[0] < _PRINT_EVERY_S:
+                return
+            printed[0] = r["elapsed_s"]
+            line = _interval_line(*live, r)
+            if _reports is None:
+                print(line, file=sys.stderr, flush=True)
+            else:
+                _reports.put(line)
+    (row,) = _core.simulate(trace, blocks, [algorithm], on_report=on_report, **core)
     return row
 
 
-def _worker_init() -> None:
+def _interval_line(label: str, n_total: int | None, r: dict) -> str:
+    seen = r["n_requests"] + r["n_requests_skipped"]
+    share = f" ({100 * seen / n_total:.1f}%)" if n_total else ""
+    engine = r["engine_compute_saving_ratio"]
+    t = r["trace_time_s"]
+    when = f"{t / 3600:.1f} h" if t < 2 * 86400 else f"{t / 86400:.1f} d"
+    return (f"  {label}, {when}{share}: "
+            f"hit {r['block_hit_ratio']:.4f} (interval {r['interval_block_hit_ratio']:.4f}), "
+            f"saving {r['compute_saving_ratio']:.4f} (interval {r['interval_compute_saving_ratio']:.4f})"
+            + ("" if engine is None else
+               f", engine saving {engine:.4f} (interval {r['interval_engine_compute_saving_ratio']:.4f})")
+            + f" ({r['elapsed_s']:.0f}s)")
+
+
+def _print_lines(queue) -> None:
+    while (line := queue.get()) is not None:
+        print(line, file=sys.stderr, flush=True)
+
+
+def _seconds(interval: float | str | None) -> float:
+    """``report_interval`` in seconds; 0 for none."""
+    if interval is None:
+        return 0.0
+    if isinstance(interval, str):
+        m = re.fullmatch(r"\s*(\d+\.?\d*)\s*([smhd]?)\s*", interval)
+        if not m:
+            raise ValueError(f"bad report_interval {interval!r}: seconds, or 30m, 6h, 1d")
+        return float(m[1]) * _SECONDS[m[2]]
+    if interval < 0:
+        raise ValueError("report_interval must not be negative")
+    return float(interval)
+
+
+def _worker_init(reports=None) -> None:
+    global _reports
+    _reports = reports
     # A worker spends its time in C++, out of reach of KeyboardInterrupt: let
     # Ctrl-C kill it outright, and on Linux have it killed when the parent dies.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
