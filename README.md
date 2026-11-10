@@ -40,13 +40,14 @@ glib, zstd and Python's headers.
 
 ### The `dev` branch
 
-`dev` builds on [haochengxia/PrefixSim `dev`](https://github.com/haochengxia/PrefixSim/tree/dev)
-and [haochengxia/libCacheSim `perf/evict-n`](https://github.com/haochengxia/libCacheSim/tree/perf/evict-n),
-changes not yet in PrefixSim and libCacheSim: a flat set for the per-request
-block sets, eviction that steps over a request's pinned blocks once instead of
-once per block, and interval reports (below). Results are the same; on
-freeinference at 64k blocks, FIFO runs 3.7x and LRU 2.5x faster. It has no
-wheels; build it from source:
+`dev` builds on what PrefixSim and libCacheSim have merged or have in review
+but not yet released together: PrefixSim `main` (a flat set for the per-request
+block sets), its open PR #5 (interval reports, below) and libCacheSim `develop`
+(#386: the pin scan resumes where it stopped instead of restarting for every
+eviction). They are combined on
+[haochengxia/PrefixSim `next`](https://github.com/haochengxia/PrefixSim/tree/next)
+until PrefixSim has them. Results are the same, except `wtinylfu`, which
+libCacheSim changed (#376, #385). It has no wheels; build it from source:
 
 ```bash
 uv pip install "prefixsim @ git+https://github.com/haochengxia/PrefixSim-python@dev"

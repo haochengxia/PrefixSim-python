@@ -204,7 +204,7 @@ def simulate(
     interval_s = _seconds(report_interval)
     core = dict(cost_model=cost_model, algo_params=algo_params, trace_format=trace_format, block_id=block_id,
                 replay_deepest_first=replay_order == "deepest-first", verify=verify, pin=pin,
-                engine_metrics=engine_metrics, seed=-1 if seed is None else seed, report_interval_s=interval_s)
+                engine_metrics=engine_metrics, seed=-1 if seed is None else seed, report_interval_sec=interval_s)
     live = progress and interval_s > 0
     runs = [(a, b) for a in algos for b in blocks]
     results: list[dict | None] = [None] * len(runs)
@@ -296,18 +296,18 @@ def _print_lines(queue) -> None:
         print(line, file=sys.stderr, flush=True)
 
 
-def _seconds(interval: float | str | None) -> float:
-    """``report_interval`` in seconds; 0 for none."""
+def _seconds(interval: float | str | None) -> int:
+    """``report_interval`` in whole seconds, as PrefixSim takes it; 0 for none."""
     if interval is None:
-        return 0.0
+        return 0
     if isinstance(interval, str):
         m = re.fullmatch(r"\s*(\d+\.?\d*)\s*([smhd]?)\s*", interval)
         if not m:
             raise ValueError(f"bad report_interval {interval!r}: seconds, or 30m, 6h, 1d")
-        return float(m[1]) * _SECONDS[m[2]]
-    if interval < 0:
-        raise ValueError("report_interval must not be negative")
-    return float(interval)
+        interval = float(m[1]) * _SECONDS[m[2]]
+    if interval < 0 or interval != int(interval):
+        raise ValueError(f"report_interval must be whole seconds, not {interval!r}")
+    return int(interval)
 
 
 def _worker_init(reports=None) -> None:

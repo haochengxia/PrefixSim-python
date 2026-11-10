@@ -110,6 +110,7 @@ class EngineMatch : public TraceReader {
 // the time and over the interval.
 struct Interval {
   IntervalReport r;
+  double elapsed_s = 0;
   int64_t engine_hits = 0, interval_engine_hits = 0;
   double engine_saved = 0, interval_engine_saved = 0;
 };
@@ -121,8 +122,8 @@ py::object ratio_or_none(bool on, double num, double den) {
 py::dict interval_dict(const Interval &iv, bool engine) {
   const Stats &t = iv.r.total, &i = iv.r.interval;
   py::dict d;
-  d["trace_time_s"] = iv.r.trace_time_s;
-  d["elapsed_s"] = iv.r.elapsed_s;
+  d["trace_time_s"] = iv.r.time_sec;
+  d["elapsed_s"] = iv.elapsed_s;
   d["n_requests"] = t.n_requests;
   d["n_requests_skipped"] = t.n_requests_skipped;
   d["n_blocks"] = t.n_blocks;
@@ -156,7 +157,7 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
                   const std::vector<std::string> &algorithms, const std::string &cost_spec,
                   const std::string &params, const std::string &trace_format,
                   const std::string &block_id_name, bool deepest_first, bool verify, bool pin,
-                  bool engine, int64_t seed, double report_interval_s, py::object on_report) {
+                  bool engine, int64_t seed, int64_t report_interval_sec, py::object on_report) {
   std::string error;
   CostModel cost;
   if (!CostModel::parse(cost_spec, cost, error)) throw py::value_error("cost_model: " + error);
@@ -208,10 +209,11 @@ py::list simulate(const std::string &path, int64_t cache_blocks,
       bool ok;
       {
         EngineMatch em(stream ? reader.get() : nullptr, loaded, cache, cost, cache_blocks);
-        cfg.report_interval_s = report_interval_s;
+        cfg.report_interval_sec = report_interval_sec;
         cfg.on_report = [&](const IntervalReport &r) {
           Interval iv;
           iv.r = r;
+          iv.elapsed_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
           iv.engine_hits = em.hits;
           iv.engine_saved = em.saved;
           iv.interval_engine_hits = em.hits - (intervals.empty() ? 0 : intervals.back().engine_hits);
@@ -289,6 +291,6 @@ PYBIND11_MODULE(_core, m) {
         arg("cost_model") = "uniform", arg("algo_params") = "", arg("trace_format") = "auto",
         arg("block_id") = "prefix", arg("replay_deepest_first") = true, arg("verify") = true,
         arg("pin") = true, arg("engine_metrics") = true, arg("seed") = -1,
-        arg("report_interval_s") = 0.0, arg("on_report") = py::none());
+        arg("report_interval_sec") = 0, arg("on_report") = py::none());
   m.def("convert", &convert, arg("input"), arg("output"), arg("block_size_tokens") = 16);
 }
