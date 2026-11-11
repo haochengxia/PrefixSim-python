@@ -113,6 +113,19 @@ the block, so the parent is always newer and LRU's victim is a leaf. With
 `prefix-order` replay, or with `raw` ids where one id can sit under different
 parents, LRU leaves gaps too.
 
+## Leaderboard
+
+[haochengxia.github.io/PrefixSim-python](https://haochengxia.github.io/PrefixSim-python/)
+has every algorithm at 16k to 256k blocks on both traces, with the cost model
+`qwen3coder30b_blksz_16`, as charts and ranked tables, plus the results as CSV
+and JSON. `.github/workflows/leaderboard.yml` reruns it on each release; to run
+it yourself:
+
+```bash
+python leaderboard/run.py --trace freeinference --out results/freeinference.jsonl
+python leaderboard/build.py results/*.jsonl --out site   # site/index.html
+```
+
 ## Notes
 
 - **Models.** Only standard attention (MHA/GQA/MQA) and MLA, dense or MoE, are
@@ -136,5 +149,7 @@ parents, LRU leaves gaps too.
 
 `.github/workflows/wheels.yml` builds and tests every wheel on each push.
 Running it by hand publishes to TestPyPI, and publishing a GitHub release
-publishes to PyPI, both through trusted publishing. To build locally:
+publishes to PyPI, both through trusted publishing. A release also reruns the
+leaderboard and publishes it to GitHub Pages (Settings > Pages > Source:
+GitHub Actions). To build locally:
 `uvx cibuildwheel --platform linux` (needs Docker), or `uv build --sdist`.

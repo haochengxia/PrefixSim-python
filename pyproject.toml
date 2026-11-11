@@ -43,7 +43,7 @@ wheel.packages = ["src/prefixsim"]
 cmake.build-type = "Release"
 # the sdist keeps only what the build needs (libCacheSim's data/ alone is 111 MB)
 sdist.exclude = [
-    ".github", "tests/__pycache__",
+    ".github", "leaderboard", "tests/__pycache__",
     "extern/PrefixSim/doc", "extern/PrefixSim/test",
     "extern/PrefixSim/libCacheSim/data", "extern/PrefixSim/libCacheSim/doc",
     "extern/PrefixSim/libCacheSim/example", "extern/PrefixSim/libCacheSim/libCacheSim-node",

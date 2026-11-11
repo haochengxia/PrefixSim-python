@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrefixSim algorithm leaderboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb; --raised: #f3f2ee; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --base: #c3c2b7; --context: #d6d5cd; --bar: #a9c8ef;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface: #1a1a19; --raised: #242423; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --base: #383835; --context: #42423e; --bar: #2b4f7c;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19; --raised: #242423; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --base: #383835; --context: #42423e; --bar: #2b4f7c;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 64px; }
+h1 { font-size: 26px; line-height: 1.2; margin: 0 0 8px; font-weight: 650; }
+h2 { font-size: 20px; margin: 0 0 2px; font-weight: 650; }
+p { margin: 0 0 12px; }
+a { color: inherit; text-underline-offset: 2px; text-decoration-color: var(--muted); }
+a:hover { text-decoration-color: currentColor; }
+code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.lede { color: var(--ink2); max-width: 70ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 14px 0 0; padding: 0; list-style: none; color: var(--ink2); font-size: 13px; }
+.meta b { font-weight: 500; color: var(--muted); margin-right: 4px; }
+
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  margin: 28px -20px 0; padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--grid); }
+.controls .label { font-size: 13px; color: var(--ink2); }
+.seg { display: inline-flex; border: 1px solid var(--base); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { font: inherit; font-size: 14px; color: var(--ink2); background: none; border: 0; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+.seg button:hover { color: var(--ink); background: var(--raised); }
+.seg button[aria-pressed="true"] { color: var(--ink); background: var(--raised); box-shadow: inset 0 0 0 1px var(--base); font-weight: 550; }
+.seg button:focus-visible, th button:focus-visible, svg:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+@media (min-width: 700px) {
+  .controls { position: sticky; top: 0; z-index: 2; }
+}
+@media (max-width: 520px) {
+  .seg button { font-size: 13px; padding: 4px 8px; white-space: nowrap; }
+}
+.metric-desc { flex-basis: 100%; font-size: 13px; color: var(--ink2); margin: 0; }
+
+section.trace { margin-top: 40px; }
+.desc { color: var(--ink2); margin-bottom: 16px; }
+.chart-title { font-weight: 600; margin: 0 0 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--ink2); margin: 0 0 4px; padding: 0; list-style: none; }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { flex: none; }
+.chart { position: relative; }
+.chart svg { display: block; overflow: visible; }
+.chart text { font: 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--ink2); }
+.chart .tick { font-variant-numeric: tabular-nums; }
+.chart .sub { fill: var(--muted); font-size: 11px; }
+.chart .endlabel { fill: var(--ink); }
+.tip { position: absolute; pointer-events: none; min-width: 210px; padding: 8px 10px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--base); border-radius: 8px; box-shadow: 0 4px 16px rgb(0 0 0 / .12); }
+.tip[hidden] { display: none; }
+.tip h3 { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+.tip h3 span { font-weight: 400; color: var(--muted); }
+.tip .row { display: grid; grid-template-columns: 10px 1fr auto auto; align-items: center; gap: 8px; padding: 1px 0; }
+.tip .row.near { font-weight: 600; }
+.tip .row .v, .tip .row .r { font-variant-numeric: tabular-nums; text-align: right; }
+.tip .row .r { color: var(--muted); min-width: 3ch; }
+.tip hr { border: 0; border-top: 1px solid var(--grid); margin: 4px 0; }
+
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot.none { background: none; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.tag { font-size: 11px; color: var(--ink2); border: 1px solid var(--base); border-radius: 4px; padding: 0 4px; margin-left: 6px; }
+
+.tablewrap { overflow-x: auto; margin-top: 20px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+caption { text-align: left; font-size: 13px; color: var(--ink2); padding-bottom: 6px; }
+th, td { padding: 5px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+thead th { text-align: left; font-weight: 500; color: var(--ink2); border-bottom: 1px solid var(--base); vertical-align: bottom; }
+th.num, td.num { text-align: right; }
+td.num { font-variant-numeric: tabular-nums; position: relative; }
+td.rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; width: 3ch; }
+td.name { width: 100%; }
+td.name span.n { display: inline-flex; align-items: center; gap: 8px; }
+th button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: right; line-height: 1.25; }
+th button .sub { display: block; font-size: 11px; color: var(--muted); }
+th[aria-sort] button { color: var(--ink); font-weight: 600; }
+td.best { font-weight: 600; }
+td.na { color: var(--muted); }
+.bar { position: absolute; left: 10px; right: 10px; bottom: 2px; height: 3px; }
+.bar i { display: block; height: 100%; border-radius: 2px; background: var(--bar); }
+tbody tr:hover, tbody tr.hot { background: var(--raised); }
+
+footer { margin-top: 48px; color: var(--ink2); font-size: 13px; max-width: 75ch; }
+footer h2 { font-size: 15px; color: var(--ink); margin-top: 20px; }
+footer dt { font-weight: 600; color: var(--ink); }
+footer dd { margin: 0 0 8px; }
+@media (forced-colors: active) {
+  .dot { forced-color-adjust: none; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>PrefixSim algorithm leaderboard</h1>
+  <p class="lede">Every eviction algorithm <a href="https://github.com/cacheMon/PrefixSim">PrefixSim</a>
+    drives, replayed over two LLM-serving traces at several KV-cache sizes, through the
+    <a href="https://pypi.org/project/prefixsim/">prefixsim</a> Python package. Each run is one algorithm at one
+    size over the whole trace. Higher is better for every metric.</p>
+  <ul class="meta" id="meta"></ul>
+</header>
+<div class="controls">
+  <span class="label" id="metric-label">Metric</span>
+  <div class="seg" role="group" aria-labelledby="metric-label" id="metrics"></div>
+  <p class="metric-desc" id="metric-desc"></p>
+</div>
+<div id="traces"></div>
+<footer>
+  <h2>How these were run</h2>
+  <p>Defaults of <code>prefixsim.simulate</code>: pinning on, <code>replay_order="deepest-first"</code>,
+    <code>block_id="prefix"</code>, the cost model shown above. Each run is its own process; a run that crashed
+    or passed the time limit shows as "—" (hover it for why). The oracles (<code>belady</code>,
+    <code>belady_compute</code>, <code>session_belady</code>) read each block's next access from the trace, so
+    they bound what an online algorithm can reach; their lines are dashed.</p>
+  <dl id="defs"></dl>
+  <p id="source"></p>
+</footer>
+</main>
+<script>
+"use strict";
+const DATA = __DATA__;
+const METRICS = [
+  { key: "compute_saving_ratio", label: "Compute saving",
+    desc: "Share of the trace's prefill compute that cache hits save, by the cost model. PrefixSim's metric: every resident block counts, even after a miss." },
+  { key: "block_hit_ratio", label: "Block hit ratio",
+    desc: "Share of the trace's blocks found in the cache. Every resident block counts, even after a miss." },
+  { key: "engine_compute_saving_ratio", label: "Engine compute saving",
+    desc: "Compute saving counting only the hits before each request's first miss, which is what vLLM and SGLang reuse." },
+];
+const ORACLES = new Set(["belady", "belady_compute", "session_belady"]);
+const MIB_PER_BLOCK = { qwen3coder30b_blksz_16: 1.5 };  // 16-token block of Qwen3-Coder-30B's KV cache, bf16
+const HL = DATA.highlight;
+const SVGNS = "http://www.w3.org/2000/svg";
+
+const params = new URLSearchParams(location.search);
+let metric = METRICS.some(m => m.key === params.get("metric")) ? params.get("metric") : METRICS[0].key;
+
+function el(tag, attrs = {}, parent = null, text = null) {
+  const svg = ["svg", "g", "path", "line", "circle", "text", "rect", "tspan", "polyline"].includes(tag);
+  const e = svg ? document.createElementNS(SVGNS, tag) : document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) e.setAttribute(k, v);
+  if (text !== null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const color = a => HL.includes(a) ? `var(--s${HL.indexOf(a) + 1})` : null;
+const pct = (v, d = 2) => (v * 100).toFixed(d) + "%";
+const blocks = b => b % 1048576 === 0 ? b / 1048576 + "m" : b % 1024 === 0 ? b / 1024 + "k" : String(b);
+function bytes(b) {
+  const mib = MIB_PER_BLOCK[DATA.meta.cost_model];
+  if (!mib) return "";
+  const gib = b * mib / 1024;
+  return gib >= 1024 ? +(gib / 1024).toFixed(1) + " TiB" : +gib.toFixed(1) + " GiB";
+}
+const sizeLabel = b => `${blocks(b)} blocks` + (bytes(b) ? ` · ${bytes(b)}` : "");
+function value(row, size) {
+  const c = row.cells[String(size)];
+  return c && c.status === "ok" && typeof c[metric] === "number" ? c[metric] : null;
+}
+function why(c) {
+  if (!c) return "not run";
+  if (c.status === "timeout") return `passed the time limit after ${Math.round(c.elapsed_s)} s`;
+  if (c.status === "failed") return "failed: " + (c.error || "no message");
+  return "no value";
+}
+function ranks(trace, size) {  // algorithm -> rank at size; ties share a rank
+  const vs = trace.rows.map(r => [r.algorithm, value(r, size)]).filter(([, v]) => v !== null);
+  const out = new Map();
+  for (const [a, v] of vs) out.set(a, 1 + vs.filter(([, w]) => w > v).length);
+  return out;
+}
+
+// ---- header -------------------------------------------------------------
+function header() {
+  const m = DATA.meta, ul = document.getElementById("meta");
+  const item = (label, text, href) => {
+    const li = el("li", {}, ul);
+    el("b", {}, li, label);
+    if (href) el("a", { href }, li, text); else li.append(text);
+  };
+  if (m.version) item("prefixsim", m.version, `https://pypi.org/project/prefixsim/${m.version}/`);
+  if (m.prefixsim) item("PrefixSim", m.prefixsim.slice(0, 7), m.prefixsim_repo ? `${m.prefixsim_repo}/commit/${m.prefixsim}` : null);
+  if (m.libcachesim) item("libCacheSim", m.libcachesim.slice(0, 7), m.libcachesim_repo ? `${m.libcachesim_repo}/commit/${m.libcachesim}` : null);
+  if (m.cost_model) item("cost model", m.cost_model);
+  item("built", m.date);
+  const li = el("li", {}, ul);
+  el("b", {}, li, "data");
+  el("a", { href: "results.csv" }, li, "CSV");
+  li.append(" · ");
+  el("a", { href: "results.json" }, li, "JSON");
+  const defs = document.getElementById("defs");
+  for (const x of METRICS) { el("dt", {}, defs, x.label); el("dd", {}, defs, x.desc); }
+  const src = document.getElementById("source");
+  src.append("Built by ");
+  el("a", { href: "https://github.com/haochengxia/PrefixSim-python/tree/master/leaderboard" }, src, "leaderboard/");
+  if (m.run_url) { src.append(" in "); el("a", { href: m.run_url }, src, "this CI run"); }
+  src.append(".");
+}
+
+function controls(states) {
+  const box = document.getElementById("metrics");
+  const buttons = METRICS.map(x => {
+    const b = el("button", { type: "button" }, box, x.label);
+    b.addEventListener("click", () => {
+      metric = x.key;
+      const u = new URL(location.href);
+      if (x.key === METRICS[0].key) u.searchParams.delete("metric"); else u.searchParams.set("metric", x.key);
+      history.replaceState(null, "", u);
+      sync();
+      for (const s of states) { drawChart(s); drawTable(s); }
+    });
+    return [x, b];
+  });
+  function sync() {
+    for (const [x, b] of buttons) b.setAttribute("aria-pressed", String(x.key === metric));
+    document.getElementById("metric-desc").textContent = METRICS.find(x => x.key === metric).desc;
+  }
+  sync();
+}
+
+// ---- chart --------------------------------------------------------------
+function legend(ul, trace) {
+  const swatch = (li, stroke, dashed, marker) => {
+    const s = el("svg", { width: 22, height: 10, "aria-hidden": "true" }, li);
+    el("line", { x1: 1, x2: 21, y1: 5, y2: 5, stroke, "stroke-width": 2, "stroke-dasharray": dashed ? "4 3" : null }, s);
+    if (marker) el("circle", { cx: 11, cy: 5, r: 3.5, fill: stroke }, s);
+  };
+  const present = new Set(trace.rows.map(r => r.algorithm));
+  for (const a of HL) {
+    if (!present.has(a)) continue;
+    const li = el("li", {}, ul);
+    swatch(li, color(a), ORACLES.has(a), true);
+    li.append(a + (ORACLES.has(a) ? " (oracle)" : ""));
+  }
+  const li = el("li", {}, ul);
+  swatch(li, "var(--context)", false, false);
+  li.append(`the other ${trace.rows.filter(r => !HL.includes(r.algorithm)).length}`);
+}
+
+function setup(trace) {
+  const sec = el("section", { class: "trace", id: trace.name }, document.getElementById("traces"));
+  el("h2", {}, sec, trace.name);
+  const desc = el("p", { class: "desc" }, sec, trace.desc);
+  for (const rev of trace.revisions || []) {
+    desc.append(" Dataset revision ");
+    el("a", { href: `https://huggingface.co/datasets/harvardMadsys/2026_prefixcache/tree/${rev}` }, desc, rev.slice(0, 7));
+    desc.append(".");
+  }
+  const title = el("p", { class: "chart-title" }, sec);
+  legend(el("ul", { class: "legend" }, sec), trace);
+  const box = el("div", { class: "chart" }, sec);
+  const svg = el("svg", { tabindex: 0, role: "img" }, box);
+  const tip = el("div", { class: "tip", hidden: "" }, box);
+  const wrap = el("div", { class: "tablewrap" }, sec);
+  const table = el("table", {}, wrap);
+  const mid = trace.sizes[Math.floor(trace.sizes.length / 2)];
+  const st = { trace, svg, box, tip, title, table, sortSize: mid, cross: null, py: null, near: null, rowHot: null };
+  svg.addEventListener("pointermove", e => pointer(st, e));
+  svg.addEventListener("pointerdown", e => pointer(st, e));
+  svg.addEventListener("pointerleave", () => { st.cross = null; st.near = null; overlay(st); });
+  svg.addEventListener("keydown", e => keys(st, e));
+  svg.addEventListener("focus", () => { if (st.cross === null) { st.cross = trace.sizes.length - 1; st.py = null; overlay(st); } });
+  svg.addEventListener("blur", () => { st.cross = null; st.near = null; overlay(st); });
+  return st;
+}
+
+function drawChart(st) {
+  const { trace, svg, box } = st;
+  const mlabel = METRICS.find(x => x.key === metric).label;
+  st.title.textContent = `${mlabel} by cache size`;
+  svg.replaceChildren();
+  const W = Math.max(320, box.clientWidth), H = 340;
+  const m = { t: 10, r: W < 560 ? 112 : 140, b: 48, l: 48 };
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const sizes = trace.sizes, lg = sizes.map(Math.log2);
+  const x = i => sizes.length === 1 ? (m.l + W - m.r) / 2 : m.l + (lg[i] - lg[0]) / (lg[lg.length - 1] - lg[0]) * (W - m.r - m.l);
+  const vals = trace.rows.flatMap(r => sizes.map(s => value(r, s))).filter(v => v !== null);
+  let lo = vals.length ? Math.floor(Math.min(...vals) * 10) / 10 : 0;
+  let hi = vals.length ? Math.ceil(Math.max(...vals) * 10) / 10 : 1;
+  if (hi - lo < 0.1) hi = lo + 0.1;
+  const y = v => m.t + (hi - v) / (hi - lo) * (H - m.t - m.b);
+  Object.assign(st, { W, H, m, x, y });
+
+  const best = sizes.map(s => Math.max(...trace.rows.map(r => value(r, s) ?? -1)));
+  const leader = sizes.map((s, i) => trace.rows.find(r => value(r, s) === best[i])?.algorithm);
+  svg.setAttribute("aria-label", `${trace.name}: ${mlabel.toLowerCase()} of ${trace.rows.length} algorithms at ${sizes.length} cache sizes. ` +
+    sizes.map((s, i) => leader[i] ? `${blocks(s)}: ${leader[i]} ${pct(best[i], 1)}` : "").filter(Boolean).join("; ") +
+    ". Arrow keys move between sizes; the table below has every value.");
+
+  // grid and axes
+  const g = el("g", {}, svg);
+  const step = hi - lo > 0.3 ? 10 : 5;
+  for (let k = Math.round(lo * 100); k <= Math.round(hi * 100); k += step) {
+    const yy = y(k / 100);
+    el("line", { x1: m.l, x2: W - m.r, y1: yy, y2: yy, stroke: k === Math.round(lo * 100) ? "var(--base)" : "var(--grid)", "stroke-width": 1, "shape-rendering": "crispEdges" }, g);
+    el("text", { x: m.l - 8, y: yy, "text-anchor": "end", "dominant-baseline": "middle", class: "tick" }, g, k + "%");
+  }
+  sizes.forEach((s, i) => {
+    const t = el("text", { x: x(i), y: H - m.b + 18, "text-anchor": "middle", class: "tick" }, g, blocks(s));
+    if (bytes(s)) el("text", { x: x(i), y: H - m.b + 33, "text-anchor": "middle", class: "tick sub" }, g, bytes(s));
+  });
+  el("text", { x: W, y: H - 2, "text-anchor": "end", class: "sub" }, g,
+    "cache size: blocks" + (bytes(sizes[0]) ? ", and KV bytes for Qwen3-Coder-30B in bf16" : ""));
+
+  const path = row => {
+    let d = "", open = false;
+    sizes.forEach((s, i) => {
+      const v = value(row, s);
+      if (v === null) { open = false; return; }
+      d += (open ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1);
+      open = true;
+    });
+    return d;
+  };
+  st.path = path;
+
+  const ctx = el("g", { fill: "none", stroke: "var(--context)", "stroke-width": 1.25, "aria-hidden": "true" }, svg);
+  for (const r of trace.rows) {
+    if (HL.includes(r.algorithm)) continue;
+    el("path", { d: path(r), "stroke-dasharray": ORACLES.has(r.algorithm) ? "4 3" : null }, ctx);
+  }
+  st.gHot = el("g", { "aria-hidden": "true" }, svg);
+  const hl = el("g", { "aria-hidden": "true" }, svg);
+  const ends = [];
+  for (const a of [...HL].reverse()) {
+    const r = trace.rows.find(r => r.algorithm === a);
+    if (!r) continue;
+    el("path", { d: path(r), fill: "none", stroke: color(a), "stroke-width": 2, "stroke-linejoin": "round", "stroke-dasharray": ORACLES.has(a) ? "5 3" : null }, hl);
+    let last = null;
+    sizes.forEach((s, i) => {
+      const v = value(r, s);
+      if (v === null) return;
+      el("circle", { cx: x(i), cy: y(v), r: 4, fill: color(a), stroke: "var(--surface)", "stroke-width": 2, "paint-order": "stroke" }, hl);
+      last = [i, v];
+    });
+    if (last) ends.push({ a, px: x(last[0]), py: y(last[1]), ly: y(last[1]) });
+  }
+  // direct labels at the right, pushed apart when they would collide
+  ends.sort((p, q) => p.py - q.py);
+  const gap = 15;
+  for (let i = 1; i < ends.length; i++) ends[i].ly = Math.max(ends[i].ly, ends[i - 1].ly + gap);
+  const over = ends.length ? ends[ends.length - 1].ly - (H - m.b) : 0;
+  if (over > 0) for (const e of ends) e.ly -= over;
+  for (let i = ends.length - 2; i >= 0; i--) ends[i].ly = Math.min(ends[i].ly, ends[i + 1].ly - gap);
+  const lx = W - m.r + 14;
+  for (const e of ends) {
+    if (Math.abs(e.ly - e.py) > 1 || e.px < W - m.r - 1)
+      el("polyline", { points: `${e.px + 6},${e.py} ${lx - 8},${e.ly} ${lx - 4},${e.ly}`, fill: "none", stroke: color(e.a), "stroke-width": 1 }, hl);
+    el("text", { x: lx, y: e.ly, "dominant-baseline": "middle", class: "endlabel" }, hl, e.a);
+  }
+  st.gCross = el("g", { "aria-hidden": "true" }, svg);
+  overlay(st);
+}
+
+function pointer(st, e) {
+  const rect = st.svg.getBoundingClientRect();
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  let i = 0;
+  st.trace.sizes.forEach((s, j) => { if (Math.abs(st.x(j) - px) < Math.abs(st.x(i) - px)) i = j; });
+  st.cross = i; st.py = py;
+  let near = null, dist = 18;
+  for (const r of st.trace.rows) {
+    const v = value(r, st.trace.sizes[i]);
+    if (v !== null && Math.abs(st.y(v) - py) < dist) { dist = Math.abs(st.y(v) - py); near = r.algorithm; }
+  }
+  st.near = near;
+  overlay(st);
+}
+
+function keys(st, e) {
+  const n = st.trace.sizes.length;
+  const i = st.cross ?? n - 1;
+  const to = { ArrowLeft: Math.max(0, i - 1), ArrowRight: Math.min(n - 1, i + 1), Home: 0, End: n - 1 }[e.key];
+  if (to !== undefined) { st.cross = to; st.py = null; st.near = null; overlay(st); e.preventDefault(); }
+  else if (e.key === "Escape") { st.cross = null; overlay(st); }
+}
+
+function overlay(st) {
+  if (!st.gCross) return;
+  const { trace, x, y, m, H, W, tip } = st;
+  st.gCross.replaceChildren();
+  st.gHot.replaceChildren();
+  const hot = st.near ?? st.rowHot;
+  for (const tr of st.table.querySelectorAll("tbody tr")) tr.classList.toggle("hot", tr.dataset.algo === hot);
+  if (hot) {
+    const r = trace.rows.find(r => r.algorithm === hot);
+    const c = color(hot) ?? "var(--ink)";
+    el("path", { d: st.path(r), fill: "none", stroke: c, "stroke-width": HL.includes(hot) ? 3.5 : 2, "stroke-linejoin": "round" }, st.gHot);
+    trace.sizes.forEach((s, i) => {
+      const v = value(r, s);
+      if (v !== null) el("circle", { cx: x(i), cy: y(v), r: 3.5, fill: c, stroke: "var(--surface)", "stroke-width": 2, "paint-order": "stroke" }, st.gHot);
+    });
+  }
+  if (st.cross === null) { tip.hidden = true; return; }
+  const i = st.cross, size = trace.sizes[i], cx = x(i);
+  el("line", { x1: cx, x2: cx, y1: m.t, y2: H - m.b, stroke: "var(--muted)", "stroke-width": 1, "shape-rendering": "crispEdges" }, st.gCross);
+
+  const rk = ranks(trace, size);
+  const byName = new Map(trace.rows.map(r => [r.algorithm, r]));
+  const list = HL.filter(a => byName.has(a));
+  const top = [...rk].find(([, k]) => k === 1)?.[0];
+  const extra = [top, st.near].filter((a, j, arr) => a && !list.includes(a) && arr.indexOf(a) === j);
+  tip.replaceChildren();
+  const h = el("h3", {}, tip, `${blocks(size)} blocks`);
+  if (bytes(size)) el("span", {}, h, ` · ${bytes(size)}`);
+  const line = a => {
+    const r = byName.get(a), v = value(r, size);
+    const row = el("div", { class: "row" + (a === st.near ? " near" : "") }, tip);
+    const d = el("span", { class: "dot" + (color(a) ? "" : " none") }, row);
+    if (color(a)) d.style.background = color(a);
+    el("span", {}, row, a);
+    el("span", { class: "v" }, row, v === null ? "—" : pct(v));
+    el("span", { class: "r", title: "rank at this size" }, row, v === null ? "" : "#" + rk.get(a));
+    if (v === null) row.title = why(r.cells[String(size)]);
+  };
+  list.map(a => [a, value(byName.get(a), size) ?? -1]).sort((p, q) => q[1] - p[1]).forEach(([a]) => line(a));
+  if (extra.length) { el("hr", {}, tip); extra.forEach(line); }
+  tip.hidden = false;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = cx + 14;
+  if (left + tw > W) left = cx - 14 - tw;
+  const top0 = st.py === null ? m.t : st.py - th / 2;
+  tip.style.left = Math.max(0, left) + "px";
+  tip.style.top = Math.min(Math.max(0, top0), H - th) + "px";
+}
+
+// ---- table --------------------------------------------------------------
+function drawTable(st) {
+  const { trace, table } = st;
+  const mlabel = METRICS.find(x => x.key === metric).label;
+  table.replaceChildren();
+  el("caption", {}, table, `${mlabel} of every algorithm, ranked at ${sizeLabel(st.sortSize)}. Pick a size to rank by it.`);
+  const hr = el("tr", {}, el("thead", {}, table));
+  el("th", { class: "num", scope: "col" }, hr, "#");
+  el("th", { scope: "col" }, hr, "Algorithm");
+  for (const s of trace.sizes) {
+    const th = el("th", { class: "num", scope: "col", "aria-sort": s === st.sortSize ? "descending" : null }, hr);
+    const b = el("button", { type: "button", "aria-label": `Rank by ${sizeLabel(s)}` }, th, (s === st.sortSize ? "↓ " : "") + blocks(s));
+    if (bytes(s)) el("span", { class: "sub" }, b, bytes(s));
+    b.addEventListener("click", () => { st.sortSize = s; drawTable(st); });
+  }
+  const rk = ranks(trace, st.sortSize);
+  const best = new Map(trace.sizes.map(s => [s, Math.max(...trace.rows.map(r => value(r, s) ?? -1))]));
+  const rows = [...trace.rows].sort((p, q) => {
+    const a = value(p, st.sortSize), b = value(q, st.sortSize);
+    if (a === null || b === null) return (a === null) - (b === null) || p.algorithm.localeCompare(q.algorithm);
+    return b - a || p.algorithm.localeCompare(q.algorithm);
+  });
+  const tb = el("tbody", {}, table);
+  for (const r of rows) {
+    const tr = el("tr", { "data-algo": r.algorithm }, tb);
+    el("td", { class: "rank" }, tr, rk.has(r.algorithm) ? String(rk.get(r.algorithm)) : "");
+    const n = el("span", { class: "n" }, el("td", { class: "name" }, tr));
+    const d = el("span", { class: "dot" + (color(r.algorithm) ? "" : " none"), "aria-hidden": "true" }, n);
+    if (color(r.algorithm)) d.style.background = color(r.algorithm); else d.style.visibility = "hidden";
+    el("code", {}, n, r.algorithm);
+    if (ORACLES.has(r.algorithm)) el("span", { class: "tag" }, n, "oracle");
+    for (const s of trace.sizes) {
+      const v = value(r, s), c = r.cells[String(s)];
+      if (v === null) { el("td", { class: "num na", title: why(c) }, tr, "—"); continue; }
+      const td = el("td", { class: "num" + (v === best.get(s) ? " best" : ""), title: `${v.toFixed(6)}, ${Math.round(c.elapsed_s)} s to run` }, tr, pct(v));
+      if (s === st.sortSize) el("i", { style: `width:${(v * 100).toFixed(1)}%` }, el("span", { class: "bar", "aria-hidden": "true" }, td));
+    }
+    tr.addEventListener("mouseenter", () => { st.rowHot = r.algorithm; overlay(st); });
+    tr.addEventListener("mouseleave", () => { st.rowHot = null; overlay(st); });
+  }
+}
+
+header();
+const states = DATA.traces.map(setup);
+controls(states);
+for (const s of states) { drawChart(s); drawTable(s); }
+let width = window.innerWidth;
+addEventListener("resize", () => {
+  if (window.innerWidth === width) return;
+  width = window.innerWidth;
+  for (const s of states) drawChart(s);
+});
+</script>
+</body>
+</html>
