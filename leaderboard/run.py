@@ -22,6 +22,9 @@ from concurrent.futures import ThreadPoolExecutor
 import prefixsim
 
 COST_MODEL = "qwen3coder30b_blksz_16"
+# The slowest, from a full sweep (lfuda passed 6 hours at every size; the rest took
+# 1 to 2 hours at some size). They start first, so that none of them is the tail.
+SLOW = ["lfuda", "random_compute", "s3fifo", "random_compute_small_queue", "hyperbolic", "cacheus", "wtinylfu"]
 
 # One run, in a fresh interpreter: the last stdout line is its result.
 _ONE = r"""
@@ -79,7 +82,8 @@ def main() -> None:
             r = json.loads(line)
             if r["status"] == "ok":
                 done.add((r["algorithm"], r["cache_size_blocks"]))
-    # largest caches first: they take longest, and the tail then fills idle workers
+    # the slowest algorithms and the largest caches first, so short runs fill the tail
+    algos = sorted(algos, key=lambda a: SLOW.index(a) if a in SLOW else len(SLOW))
     todo = [(a, b) for b in sorted(sizes, reverse=True) for a in algos if (a, b) not in done]
     print(f"{name}: {len(todo)} runs ({len(done)} already done), {args.jobs} at a time", flush=True)
 

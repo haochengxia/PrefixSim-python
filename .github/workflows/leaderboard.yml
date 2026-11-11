@@ -26,7 +26,7 @@ jobs:
       matrix:
         trace: [freeinference, chutes]
         size: [16k, 32k, 64k, 128k, 256k]
-        shard: [0, 1, 2]  # a third of the algorithms each, so a job stays well inside 6 hours
+        shard: [0, 1, 2]  # a third of the algorithms each, so a job stays inside 6 hours
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,10 +40,11 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: trace-${{ matrix.trace }}
-      # as many runs at a time as the runner has cores; one past two hours is given up
+      # as many runs at a time as the runner has cores; one past four hours is given
+      # up (lfuda always is; random_compute and s3fifo can take two)
       - run: >-
           python leaderboard/run.py --trace ${{ matrix.trace }} --sizes ${{ matrix.size }}
-          --shard ${{ matrix.shard }}/3 --jobs "$(nproc)" --timeout 7200
+          --shard ${{ matrix.shard }}/3 --jobs "$(nproc)" --timeout 14400
           --out results/${{ matrix.trace }}-${{ matrix.size }}-${{ matrix.shard }}.jsonl
       - uses: actions/upload-artifact@v7
         if: always()  # the runs done so far, even past the time limit

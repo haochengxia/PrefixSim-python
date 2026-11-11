@@ -48,7 +48,7 @@ def load(paths: list[str]) -> list[dict]:
         for line in open(path):
             r = json.loads(line)
             key = (r["trace"], r["algorithm"], r["cache_size_blocks"])
-            if key not in rows or r["status"] == "ok":  # a later success replaces a failure
+            if key not in rows or rows[key]["status"] != "ok":  # a later run replaces a failed one
                 rows[key] = r
     return sorted(rows.values(), key=lambda r: (r["trace"], r["algorithm"], r["cache_size_blocks"]))
 
